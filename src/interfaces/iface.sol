@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.9;
+pragma solidity 0.8.17;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -39,8 +39,5 @@ interface IDepositContract {
 }
 
 interface IRewardPool {
-    function joinpool(address claimaddr, uint256 amount) external;
-    function leavepool(address claimaddr, uint256 amount) external;
-    function claimRewards(address beneficiary, uint256 amount) external;
     function claimRewardsFor(address account) external;
 }
