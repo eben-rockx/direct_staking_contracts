@@ -119,7 +119,7 @@ contract RewardPool is
      * @dev manager withdraw revenue
      */
     function withdrawManagerRevenue(uint256 amount, address to) external nonReentrant onlyRole(MANAGER_ROLE) {
-        updateReward();
+        //updateReward();
 
         require(amount <= managerRevenue, "WITHDRAW_EXCEEDED_MANAGER_REVENUE");
 
@@ -185,7 +185,7 @@ contract RewardPool is
 
     // claimRewards
     function claimRewards(address beneficiary, uint256 amount) external nonReentrant whenNotPaused {
-        updateReward();
+        //updateReward();
 
         UserInfo storage info = userInfo[msg.sender];
 
@@ -208,7 +208,7 @@ contract RewardPool is
     // claimRewardsFor an account, the rewards will be only be claimed to the claim address for safety
     //  this function plays the role as 'settler for accounts', could only be called by controller contract.
     function claimRewardsFor(address account) external nonReentrant whenNotPaused onlyRole(CONTROLLER_ROLE) {
-        updateReward();
+        //updateReward();
 
         UserInfo storage info = userInfo[account];
 
@@ -229,7 +229,7 @@ contract RewardPool is
     /**
      * @dev updateReward of tx fee
      */
-    function updateReward() public {
+    function updateReward() internal {
         if (address(this).balance > accountedBalance && totalShares > 0) {
             (uint256 managerR, uint256 poolR) = _calcPendingReward();
             accShare += poolR * MULTIPLIER / totalShares;
