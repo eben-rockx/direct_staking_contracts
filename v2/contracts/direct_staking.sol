@@ -43,7 +43,6 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
 
     struct StakeParams {
         uint256 extraData;
-        uint256 withdrawCredentialType;
         uint256 amount;
         address claimAddr;
         address withdrawAddr;
@@ -316,23 +315,22 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
         _require(!signedParams[keccak256(params.paramsSig)], "USR002");
         _require(params.signatures.length <= 500, "USR003");
         _require(params.signatures.length == params.pubkeys.length, "USR004");
-        _require(params.withdrawCredentialType == 1 || params.withdrawCredentialType == 2, "USR005");
         _require(params.amount >= DEPOSIT_SIZE, "USR006");
         _require(params.amount <= MAX_DEPOSIT_SIZE, "USR007");
-
+        // validity check
+        _require(params.withdrawAddr != address(0x0) &&
+                    params.claimAddr != address(0x0),
+                    "SYS001");
         // may add a minimum tips for each stake
         uint256 ethersToStake = msg.value - tips;
         _require(ethersToStake == params.amount * params.signatures.length, "USR008");
 
-        // build withdrawal credential from withdraw address
-        // uint8('0x1') + 11 bytes(0) + withdraw address
-        bytes memory cred;
-        if (params.withdrawCredentialType == 1) {
-            cred = abi.encodePacked(bytes1(0x01), new bytes(11), params.withdrawAddr);
-        } else {
-            cred = abi.encodePacked(bytes1(0x02), new bytes(11), params.withdrawAddr);
-        }
+        // params signature verification
+        _require(verifySigner(params), "USR015");
 
+        // build withdrawal credential from withdraw address
+        // uint8('0x2') + 11 bytes(0) + withdraw address
+        bytes memory cred = abi.encodePacked(bytes1(0x02), new bytes(11), params.withdrawAddr);
         bytes32 withdrawal_credential = BytesLib.toBytes32(cred, 0);
 
         // deposit
@@ -436,7 +434,7 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
             )
         );
 
-        IDepositContract(ethDepositContract).deposit{value: DEPOSIT_SIZE}(
+        IDepositContract(ethDepositContract).deposit{value: amount}(
             pubkey, abi.encodePacked(withdrawal_credential), signature, depositDataRoot
         );
     }
@@ -473,7 +471,6 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
         bytes32 digest = sha256(
             abi.encode(
                 params.extraData,
-                params.withdrawCredentialType,
                 params.amount,
                 address(this),
                 block.chainid,
