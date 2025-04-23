@@ -51,7 +51,6 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
         bytes paramsSig;
     }
 
-    bytes32 public constant REGISTRY_ROLE = keccak256("REGISTRY_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     uint256 public constant DEPOSIT_SIZE = 32 ether;
     uint256 public constant MAX_DEPOSIT_SIZE = 2048 ether;
@@ -144,7 +143,6 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
         __ReentrancyGuard_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(REGISTRY_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
     }
 
