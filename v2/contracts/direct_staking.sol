@@ -41,7 +41,7 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
         bool exiting;
     }
 
-    struct SignerInput {
+    struct StakeParams {
         uint256 extraData;
         uint256 withdrawCredentialType;
         uint256 amount;
@@ -166,6 +166,40 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
 
         emit RewardPoolContractSet(_rewardPool);
     }
+
+    /**
+     * @dev admin exit a validator in emergency, and return it's principal to validator owner,
+     *  optionally to exit unclaimed mev rewards to claim address.
+     *
+     * NOTE: a user must have contact with us to perform this operation.
+     */
+    function emergencyExit(uint256 validatorId, bool exitToClaimAddress) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _emergencyExit(validatorId, exitToClaimAddress);
+    }
+
+    /**
+     * @dev batch emergency exit
+     */
+    function batchEmergencyExit(uint256[] memory validatorIds, bool exitToClaimAddress)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        for (uint256 i = 0; i < validatorIds.length; i++) {
+            _emergencyExit(validatorIds[i], exitToClaimAddress);
+        }
+    }
+
+    /**
+     * @dev Set the tips amount for each stake operation
+     * @param _tips The new tips amount in wei
+     * @notice Only callable by admin role
+     * @notice Emits a TipsSet event
+     */
+    function setTips(uint256 _tips) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        emit TipsSet(tips, _tips);
+        tips = _tips;
+    }
+
     /**
      * ======================================================================================
      *
@@ -177,13 +211,13 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
     /**
      * @dev verify signer of the paramseters
      */
-    function verifySigner(SignerInput calldata input) public view returns (bool) {
+    function verifySigner(StakeParams calldata params) public view returns (bool) {
         // do not accept paramsSig.length == 64
-        require(input.paramsSig.length != 64, "PARAMSIG64");
+        require(params.paramsSig.length != 64, "USR001");
 
         // params signature verification
-        bytes32 digest = ECDSA.toEthSignedMessageHash(_digest(input));
-        address signer = ECDSA.recover(digest, input.paramsSig);
+        bytes32 digest = ECDSA.toEthSignedMessageHash(_digest(params));
+        address signer = ECDSA.recover(digest, params.paramsSig);
 
         return (signer == sysSigner);
     }
@@ -261,55 +295,60 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
     /**
      * @dev user stakes
      */
-    function stake(SignerInput calldata input) external payable nonReentrant whenNotPaused {
+    /**
+     * @dev Allows users to stake ETH for validator registration
+     * @param params The staking parameters including:
+     *        - extraData: Additional data for user reference
+     *        - withdrawCredentialType: Type of withdrawal credentials (1 or 2)
+     *        - amount: Amount of ETH to stake per validator
+     *        - claimAddr: Address to claim rewards
+     *        - withdrawAddr: Address for withdrawals
+     *        - pubkeys: List of validator public keys
+     *        - signatures: List of validator signatures
+     *        - paramsSig: Signature of the parameters by system signer
+     * @notice Requires msg.value to equal (amount * number of validators + tips)
+     * @notice Each validator requires bigger than DEPOSIT_SIZE (32 ETH)
+     * @notice Maximum 500 validators can be registered in a single transaction
+     * @notice Emits a Staked event
+     */
+    function stake(StakeParams calldata params) external payable nonReentrant whenNotPaused {
         // global check
-        _require(!signedParams[keccak256(input.paramsSig)], "REPLAYED_PARAMS");
-        _require(input.signatures.length <= 500, "RISKY_DEPOSITS");
-        _require(input.signatures.length == input.pubkeys.length, "INCORRECT_SUBMITS");
-        _require(input.withdrawCredentialType == 1 || input.withdrawCredentialType == 2, "INCORRECT_CREDENTIAL_TYPE");
-        _require(input.amount >= DEPOSIT_SIZE, "INCORRECT_AMOUNT_TOO_SMALL");
-        _require(input.amount <= MAX_DEPOSIT_SIZE, "INCORRECT_AMOUNT_TOO_LARGE");
-
-        _require(input.amount % DEPOSIT_AMOUNT_ETHER == 0, "INCORRECT_AMOUNT_NOT_LITTLE_ENDIAN");
-        _require(
-            sysSigner != address(0x0) && ethDepositContract != address(0x0) && rewardPool != address(0x0),
-            "NOT_INITIATED"
-        );
-
-        // params signature verification
-        _require(verifySigner(input), "SIGNER_MISMATCH");
-
-        // validity check
-        _require(input.withdrawAddr != address(0x0) && input.claimAddr != address(0x0), "ZERO_ADDRESS");
+        _require(!signedParams[keccak256(params.paramsSig)], "USR002");
+        _require(params.signatures.length <= 500, "USR003");
+        _require(params.signatures.length == params.pubkeys.length, "USR004");
+        _require(params.withdrawCredentialType == 1 || params.withdrawCredentialType == 2, "USR005");
+        _require(params.amount >= DEPOSIT_SIZE, "USR006");
+        _require(params.amount <= MAX_DEPOSIT_SIZE, "USR007");
 
         // may add a minimum tips for each stake
         uint256 ethersToStake = msg.value - tips;
-        _require(ethersToStake == input.amount * input.signatures.length, "INCORRECT_AMOUNT");
+        _require(ethersToStake == params.amount * params.signatures.length, "USR008");
 
         // build withdrawal credential from withdraw address
         // uint8('0x1') + 11 bytes(0) + withdraw address
         bytes memory cred;
-        if (input.withdrawCredentialType == 1) {
-            cred = abi.encodePacked(bytes1(0x01), new bytes(11), input.withdrawAddr);
+        if (params.withdrawCredentialType == 1) {
+            cred = abi.encodePacked(bytes1(0x01), new bytes(11), params.withdrawAddr);
         } else {
-            cred = abi.encodePacked(bytes1(0x02), new bytes(11), input.withdrawAddr);
+            cred = abi.encodePacked(bytes1(0x02), new bytes(11), params.withdrawAddr);
         }
+
         bytes32 withdrawal_credential = BytesLib.toBytes32(cred, 0);
 
         // deposit
-        for (uint256 i = 0; i < input.signatures.length; i++) {
+        for (uint256 i = 0; i < params.signatures.length; i++) {
             ValidatorInfo memory info;
-            info.pubkey = input.pubkeys[i];
-            info.claimAddr = input.claimAddr;
-            info.extraData = input.extraData;
+            info.pubkey = params.pubkeys[i];
+            info.claimAddr = params.claimAddr;
+            info.extraData = params.extraData;
             validatorRegistry.push(info);
 
             // deposit to offical contract.
-            _deposit(input.pubkeys[i], input.signatures[i], withdrawal_credential, input.amount);
+            _deposit(params.pubkeys[i], params.signatures[i], withdrawal_credential, params.amount);
         }
 
         // update signedParams to avert repeated use of signature
-        signedParams[keccak256(input.paramsSig)] = true;
+        signedParams[keccak256(params.paramsSig)] = true;
 
         // log
         emit Staked(msg.sender, msg.value);
@@ -332,28 +371,6 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
     }
 
     /**
-     * @dev admin exit a validator in emergency, and return it's principal to validator owner,
-     *  optionally to exit unclaimed mev rewards to claim address.
-     *
-     * NOTE: a user must have contact with us to perform this operation.
-     */
-    function emergencyExit(uint256 validatorId, bool exitToClaimAddress) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        _emergencyExit(validatorId, exitToClaimAddress);
-    }
-
-    /**
-     * @dev batch emergency exit
-     */
-    function batchEmergencyExit(uint256[] memory validatorIds, bool exitToClaimAddress)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-    {
-        for (uint256 i = 0; i < validatorIds.length; i++) {
-            _emergencyExit(validatorIds[i], exitToClaimAddress);
-        }
-    }
-
-    /**
      * ======================================================================================
      *
      * INTERNAL FUNCTIONS
@@ -366,8 +383,8 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
      */
     function _emergencyExit(uint256 validatorId, bool exitToClaimAddress) internal {
         ValidatorInfo storage info = validatorRegistry[validatorId];
-        require(!info.exiting, "EXITING");
-        require(info.claimAddr != address(0x0), "CLAIM_ADDR_MISMATCH");
+        require(!info.exiting, "USR009");
+        require(info.claimAddr != address(0x0), "USR010");
 
         info.exiting = true;
         exitQueue.push(validatorId);
@@ -386,8 +403,8 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
      */
     function _exitValidator(uint256 validatorId, address sender) internal {
         ValidatorInfo storage info = validatorRegistry[validatorId];
-        require(!info.exiting, "EXITING");
-        require(sender == info.claimAddr, "CLAIM_ADDR_MISMATCH");
+        require(!info.exiting, "USR009");
+        require(sender == info.claimAddr, "USR010");
 
         info.exiting = true;
         exitQueue.push(validatorId);
@@ -452,21 +469,21 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
     /**
      * @dev digest params
      */
-    function _digest(SignerInput calldata input) private view returns (bytes32) {
+    function _digest(StakeParams calldata params) private view returns (bytes32) {
         bytes32 digest = sha256(
             abi.encode(
-                input.extraData,
-                input.withdrawCredentialType,
-                input.amount,
+                params.extraData,
+                params.withdrawCredentialType,
+                params.amount,
                 address(this),
                 block.chainid,
-                input.claimAddr,
-                input.withdrawAddr
+                params.claimAddr,
+                params.withdrawAddr
             )
         );
 
-        for (uint256 i = 0; i < input.pubkeys.length; i++) {
-            digest = sha256(abi.encode(digest, input.pubkeys[i], input.signatures[i]));
+        for (uint256 i = 0; i < params.pubkeys.length; i++) {
+            digest = sha256(abi.encode(digest, params.pubkeys[i], params.signatures[i]));
         }
 
         return digest;
@@ -482,4 +499,5 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
     event RewardPoolContractSet(address addr);
     event SignerSet(address addr);
     event Staked(address addr, uint256 amount);
+    event TipsSet(uint256 oldTips, uint256 newTips);
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // ⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀
 // ⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀
-// ⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⢠⣤⣤⣤⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀
+// ⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀
 // ⠉⠻⣿⡟⠛⠛⠻⣿⣄⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀⣿⣿⡀⡀⡀⡀⡀⡀⡀⠙⢿⣿⡟⠁⡀⡀⠙⣿⠟⠁
 // ⡀⡀⣿⡇⡀⡀⡀⢸⣿⡆⡀⡀⡀⡀⡀⣀⣀⡀⡀⡀⡀⡀⡀⡀⡀⣀⣀⣀⡀⡀⡀⡀⣿⣿⡀⡀⡀⡀⡀⡀⡀⡀⡀⢿⣿⡄⡀⡀⣾⠃⡀⡀
 // ⡀⡀⣿⡇⡀⡀⡀⢸⣿⠃⡀⡀⡀⣾⡿⠉⠉⠙⣿⣄⡀⡀⡀⣴⣿⠋⠉⠻⣿⡄⡀⡀⣿⣿⡀⡀⠙⣿⠿⠉⡀⡀⡀⡀⢻⣿⣄⣿⠁⡀⡀⡀
@@ -24,12 +24,7 @@ import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.
 /**
  * @title Reward Pool
  */
-contract RewardPool is
-    Initializable,
-    PausableUpgradeable,
-    AccessControlUpgradeable,
-    ReentrancyGuardUpgradeable
-{
+contract RewardPool is Initializable, PausableUpgradeable, AccessControlUpgradeable, ReentrancyGuardUpgradeable {
     using SafeERC20 for IERC20;
     using Address for address payable;
     using Address for address;
@@ -43,7 +38,7 @@ contract RewardPool is
 
     struct UserInfo {
         uint256 accSharePoint; // share starting point
-        uint256 amount; // user's share
+        int256 amount; // user's share
         uint256 rewardBalance; // user's pending reward
     }
 
@@ -83,10 +78,10 @@ contract RewardPool is
     function unpause() public onlyRole(PAUSER_ROLE) {
         _unpause();
     }
+
     /**
      * @dev disable implementation init
      */
-
     constructor() {
         _disableInitializers();
     }
@@ -106,6 +101,7 @@ contract RewardPool is
         _grantRole(CONTROLLER_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
         _grantRole(MANAGER_ROLE, msg.sender);
+        _grantRole(ORACLE_ROLE, msg.sender);
     }
 
     /**
@@ -119,9 +115,7 @@ contract RewardPool is
      * @dev manager withdraw revenue
      */
     function withdrawManagerRevenue(uint256 amount, address to) external nonReentrant onlyRole(MANAGER_ROLE) {
-        //updateReward();
-
-        require(amount <= managerRevenue, "WITHDRAW_EXCEEDED_MANAGER_REVENUE");
+       require(amount <= managerRevenue, "USR011");
 
         // track balance change
         _balanceDecrease(amount);
@@ -136,7 +130,7 @@ contract RewardPool is
      * @dev set manager's fee in 1/1000
      */
     function setManagerFeeShare(uint256 milli) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(milli >= 0 && milli <= 1000, "SHARE_OUT_OF_RANGE");
+        require(milli >= 0 && milli <= 1000, "USR012");
         managerFeeShare = milli;
 
         emit ManagerFeeSet(milli);
@@ -149,34 +143,42 @@ contract RewardPool is
      *
      * ======================================================================================
      */
-    function updatePool(address[] calldata claimaddrs, int256[] calldata amounts) external onlyRole(ORACLE_ROLE) {
-        require(claimaddrs.length == amounts.length, "ARRAY_LENGTH_MISMATCH");
+    /**
+     * @dev Updates user shares in the reward pool
+     * @param claimaddrs Array of claim addresses to update
+     * @param deltas Array of share amounts to add/subtract (positive for adding, negative for subtracting)
+     * @notice Only callable by ORACLE_ROLE
+     * @notice Updates rewards before modifying shares
+     * @notice Requirements:
+     *  - Arrays must have the same length
+     *  - Resulting user amount must not be negative
+     *  - Updates total shares accordingly
+     * @notice For each address:
+     *  1. Settles pending rewards
+     *  2. Updates user's share amount
+     *  3. Updates total shares
+     * @notice Emits a PoolUpdate event for each modification
+     */
+    function updatePool(address[] calldata claimaddrs, int256[] calldata deltas) external onlyRole(ORACLE_ROLE) {
+        require(claimaddrs.length == deltas.length, "USR004");
         updateReward();
 
         for (uint256 i = 0; i < claimaddrs.length; i++) {
             address claimaddr = claimaddrs[i];
-            int256 amount = amounts[i];
+            int256 amount = deltas[i];
 
+            UserInfo storage info = userInfo[claimaddr];
+
+            // settle current pending distribution
+            info.rewardBalance += (accShare - info.accSharePoint) * uint256(info.amount) / MULTIPLIER;
+            info.amount += amount;
+            require(info.amount >= 0, "USR013");
+            info.accSharePoint = accShare;
+
+            // update total shares
             if (amount > 0) {
-                UserInfo storage info = userInfo[claimaddr];
-
-                // settle current pending distribution
-                info.rewardBalance += (accShare - info.accSharePoint) * info.amount / MULTIPLIER;
-                info.amount += uint256(amount);
-                info.accSharePoint = accShare;
-
-                // update total shares
                 totalShares += uint256(amount);
-            } else if (amount < 0) {
-                UserInfo storage info = userInfo[claimaddr];
-                require(info.amount >= uint256(-amount), "INSUFFICIENT_AMOUNT");
-
-                // settle current pending distribution
-                info.rewardBalance += (accShare - info.accSharePoint) * info.amount / MULTIPLIER;
-                info.amount -= uint256(-amount);
-                info.accSharePoint = accShare;
-
-                // update total shares
+            } else {
                 totalShares -= uint256(-amount);
             }
             emit PoolUpdate(claimaddr, amount);
@@ -185,16 +187,14 @@ contract RewardPool is
 
     // claimRewards
     function claimRewards(address beneficiary, uint256 amount) external nonReentrant whenNotPaused {
-        //updateReward();
-
         UserInfo storage info = userInfo[msg.sender];
 
         // settle current pending distribution
-        info.rewardBalance += (accShare - info.accSharePoint) * info.amount / MULTIPLIER;
+        info.rewardBalance += (accShare - info.accSharePoint) * uint256(info.amount) / MULTIPLIER;
         info.accSharePoint = accShare;
 
         // check
-        require(info.rewardBalance >= amount, "INSUFFICIENT_REWARD");
+        require(info.rewardBalance >= amount, "USR014");
 
         // account & transfer
         info.rewardBalance -= amount;
@@ -208,12 +208,10 @@ contract RewardPool is
     // claimRewardsFor an account, the rewards will be only be claimed to the claim address for safety
     //  this function plays the role as 'settler for accounts', could only be called by controller contract.
     function claimRewardsFor(address account) external nonReentrant whenNotPaused onlyRole(CONTROLLER_ROLE) {
-        //updateReward();
-
         UserInfo storage info = userInfo[account];
 
         // settle current pending distribution
-        info.rewardBalance += (accShare - info.accSharePoint) * info.amount / MULTIPLIER;
+        info.rewardBalance += (accShare - info.accSharePoint) * uint256(info.amount) / MULTIPLIER;
         info.accSharePoint = accShare;
 
         // account & transfer
@@ -265,7 +263,7 @@ contract RewardPool is
         }
 
         return info.rewardBalance
-            + (accShare + poolReward * MULTIPLIER / totalShares - info.accSharePoint) * info.amount / MULTIPLIER;
+            + (accShare + poolReward * MULTIPLIER / totalShares - info.accSharePoint) * uint256(info.amount) / MULTIPLIER;
     }
 
     function getPendingManagerRevenue() external view returns (uint256) {
