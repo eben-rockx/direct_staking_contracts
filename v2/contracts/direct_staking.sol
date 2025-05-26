@@ -56,7 +56,6 @@ contract DirectStaking is Initializable, PausableUpgradeable, AccessControlUpgra
     uint256 public constant MAX_DEPOSIT_SIZE = 2048 ether;
 
     uint256 private constant DEPOSIT_AMOUNT_UNIT = 1000000000 wei;
-    uint256 private constant DEPOSIT_AMOUNT_ETHER = 1 ether;
     uint256 private constant SIGNATURE_LENGTH = 96;
     address public constant ethDepositContract = 0x00000000219ab540356cBB839Cbe05303d7705Fa;
 
