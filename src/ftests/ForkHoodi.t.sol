@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.17;
+pragma solidity 0.8.9;
 
 import "forge-std/Test.sol";
 import "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
@@ -49,7 +49,6 @@ contract ForkHoodiTest is Test {
         // Set contract configurations
         directStaking.setSigner(signer);
         directStaking.setRewardPool(address(rewardPool));
-        directStaking.setTips(0.01 ether);
         rewardPool.grantRole(rewardPool.CONTROLLER_ROLE(), address(directStaking));
         vm.stopPrank();
 
@@ -75,7 +74,7 @@ contract ForkHoodiTest is Test {
         return digest;
     }
 
-    function testStake() public {
+    function testStakeCompound() public {
         // prepare test data
         bytes[] memory pubkeys = new bytes[](2);
         bytes[] memory signatures = new bytes[](2);
@@ -100,8 +99,8 @@ contract ForkHoodiTest is Test {
 
         // do the staking
         vm.startPrank(stake);
-        uint256 totalAmount = params.amount * params.signatures.length + directStaking.tips();
-        directStaking.stake{value: totalAmount}(params);
+        uint256 totalAmount = params.amount * params.signatures.length;
+        directStaking.stakeCompound{value: totalAmount}(params,0);
         vm.stopPrank();
 
         // check the state
@@ -137,14 +136,6 @@ contract ForkHoodiTest is Test {
         (uint8 v, bytes32 r, bytes32 s) =
             vm.sign(privateKey, keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", digest)));
         return abi.encodePacked(r, s, v);
-    }
-
-    function testSetTips() public {
-        uint256 newTips = 0.02 ether;
-        vm.startPrank(owner);
-        directStaking.setTips(newTips);
-        vm.stopPrank();
-        assertEq(directStaking.tips(), newTips);
     }
 
     function testPause() public {
@@ -203,8 +194,8 @@ contract ForkHoodiTest is Test {
         });
 
         vm.startPrank(stake);
-        uint256 totalAmount = params.amount * params.signatures.length + directStaking.tips();
-        directStaking.stake{value: totalAmount}(params);
+        uint256 totalAmount = params.amount * params.signatures.length;
+        directStaking.stakeCompound{value: totalAmount}(params,0);
         vm.stopPrank();
     }
 
@@ -228,13 +219,8 @@ contract ForkHoodiTest is Test {
 
         vm.startPrank(stake);
         // Intentionally send insufficient ETH
-        directStaking.stake{value: 31 ether}(params);
+        directStaking.stakeCompound{value: 31 ether}(params,0);
         vm.stopPrank();
-    }
-
-    function testFailSetTipsUnauthorized() public {
-        vm.prank(address(0x1234));
-        directStaking.setTips(0.02 ether);
     }
 
     function testFailSetSignerUnauthorized() public {
@@ -245,5 +231,62 @@ contract ForkHoodiTest is Test {
     function testFailEmergencyExitUnauthorized() public {
         vm.prank(address(0x1234));
         directStaking.emergencyExit(0, true);
+    }
+
+    function _digest(
+        uint256 extraData,
+        address claimAddr,
+        address withdrawAddr,
+        bytes[] memory pubkeys,
+        bytes[] memory signatures
+    ) private view returns (bytes32) {
+        bytes32 digest = sha256(
+            abi.encode(
+                extraData,
+                address(directStaking),
+                block.chainid,
+                claimAddr,
+                withdrawAddr
+            )
+        );
+
+        for (uint256 i = 0; i < pubkeys.length; i++) {
+            digest = sha256(abi.encode(digest, pubkeys[i], signatures[i]));
+        }
+
+        return digest;
+    }
+
+    function testStake() public {
+        // prepare test data
+        bytes[] memory pubkeys = new bytes[](2);
+        bytes[] memory signatures = new bytes[](2);
+        pubkeys[0] =
+            hex"8c59a2f729051625b9473e222798101eb5571b8ed8b83c40c3963b9a8f9171c20bef5ca5fe9c096c33736c0ccb4bee69";
+        signatures[0] =
+            hex"a77a3912dbdf78313a8ab593e3258216428a63e812102aeabc25362c5d05afc7b0c0329d381082315aa40424524af4480816aa7251e3d0bd6195699e99fc023820beb7ccd16e7de55de27dcd2905fb00434e0c455fa0288e58517f1c1b0676f9";
+        pubkeys[1] =
+            hex"91aadc90df2fa2db6ae55a701ddb3f883951a267cec635ddcd953bd23e314c4bd915178e4e6c16b9b300d3a5275a720d";
+        signatures[1] =
+            hex"a833a55098980fdf96fbecc27c4079e70b6ec1c49e2a3d9b7a7041b235dfac686e845b718f21f52b0d29f1809fccf0441111a43b4b21b3443917afe5ddda51958a0c6c71e0ded0777f889d14747b8660a608f46a8fdc6b14afe13898a3b27154";
+
+        bytes32 digest = _digest(0, claim, withdraw, pubkeys, signatures);
+        (uint8 v, bytes32 r, bytes32 s) =
+            vm.sign(signerPrivateKey, keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", digest)));
+        bytes memory paramsSig = abi.encodePacked(r, s, v);
+
+        // do the staking
+        vm.startPrank(stake);
+        uint256 totalAmount = 32 ether * signatures.length + 0.1 ether; // 32 ether per signature + 0.1 ether for gas
+        directStaking.stake{value: totalAmount}(claim, withdraw, pubkeys, signatures, paramsSig, 0, 0.1 ether);
+        vm.stopPrank();
+
+        // check the state
+        assertEq(directStaking.getNextValidators(), 2);
+        (bytes memory storedPubkey, address storedClaimAddr, uint256 storedExtraData) =
+            directStaking.getValidatorInfo(0);
+        assertEq(storedPubkey, pubkeys[0]);
+        assertEq(storedClaimAddr, claim);
+        assertEq(storedExtraData, 0);
     }
 }

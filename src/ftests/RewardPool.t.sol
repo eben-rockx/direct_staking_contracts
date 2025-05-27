@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.17;
+pragma solidity 0.8.9;
 
 import "forge-std/Test.sol";
 import "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
@@ -30,6 +30,7 @@ contract RewardPoolTest is Test {
 
         // Cast proxy contract to implementation interface
         rewardPool = RewardPool(payable(address(rewardPoolProxy)));
+        rewardPool.grantRole(rewardPool.ORACLE_ROLE(), owner);
         vm.stopPrank();
 
         // Give test accounts some ETH
