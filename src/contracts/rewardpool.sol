@@ -261,22 +261,12 @@ contract RewardPool is Initializable, PausableUpgradeable, AccessControlUpgradea
         if (totalShares == 0) {  
             return info.rewardBalance;
         }
-        
-        uint256 poolReward;
-        if (address(this).balance > accountedBalance) {
-            (, poolReward) = _calcPendingReward();
-        }
 
-        return info.rewardBalance + (accShare + poolReward * MULTIPLIER / totalShares - info.accSharePoint)  * info.amount / MULTIPLIER;
+        return info.rewardBalance + (accShare - info.accSharePoint)  * info.amount / MULTIPLIER;
      }
 
     function getPendingManagerRevenue() external view returns (uint256) {
-        uint256 managerReward;
-        if (address(this).balance > accountedBalance) {
-            (managerReward, ) = _calcPendingReward();
-        }
-
-        return managerRevenue + managerReward;
+        return managerRevenue;
      }
 
     /** 
